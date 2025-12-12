@@ -96,7 +96,7 @@ python -m spectral_gui.main --device mock
 python -m spectral_gui.main --device mock
 ```
 
-#### With OSpRad Hardware
+#### With [OSpRad](https://github.com/troscianko/OSpRad/tree/main) Hardware
 ```bash
 python -m spectral_gui.main --device osprad
 ```
@@ -152,7 +152,7 @@ Open the plot window from **View → Show Plot** or press **Ctrl+P**.
 
 ### Currently Supported
 
-#### 1. OSpRad (Open Source Spectroradiometer)
+#### 1. [OSpRad](https://github.com/troscianko/OSpRad/tree/main) (Open Source Spectroradiometer)
 - Full support for radiance and irradiance measurements
 - Automatic calibration loading from `calibration_data.csv`
 - 288-pixel sensor (340-850nm typical range)
@@ -260,7 +260,7 @@ python spectral_gui/main.py  # ❌ Won't work
 - Close unused plot overlays
 - Reduce integration time for faster measurements
 
-### Calibration File Not Found (OSpRad)
+### Calibration File Not Found ([OSpRad](https://github.com/troscianko/OSpRad/tree/main))
 Place `calibration_data.csv` in the project root directory with format:
 ```csv
 wavelength,responsivity
@@ -289,10 +289,7 @@ This project is designed for educational and research purposes. Check individual
 
 ## 🙏 Acknowledgments
 
-- **OSpRad**: Open Source Spectroradiometer project
-- **matplotlib**: Excellent plotting library
-- **tkinter**: Python's standard GUI framework
-- **HCL Color Space**: Based on CIELAB perceptually uniform color space
+- **[OSpRad](https://github.com/troscianko/OSpRad/tree/main)**: Open Source Spectroradiometer project
 
 ## 📧 Support
 
