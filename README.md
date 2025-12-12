@@ -1,6 +1,6 @@
 # Spectral GUI - Portable Spectral Measurement Application
 
-A modern, device-agnostic Python GUI application for spectral measurements with focus on portability, extensibility, and user experience.
+Spectral GUI is an open-source, portable and extensible, Python application for spectral measurements. It features a modern tabbed interface, real-time spectrum plotting with perceptually uniform HCL color visualization, non-blocking threaded measurements, and an abstract driver system that makes it easy to integrate any spectrometer hardware
 
 ## 🌟 Features
 
