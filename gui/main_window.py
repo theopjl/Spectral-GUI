@@ -62,6 +62,7 @@ class SpectralMeasurementGUI:
         # Auto-repeat state
         self.auto_repeat_active = False
         self.auto_repeat_job = None
+        self.auto_repeat_waiting_for_measurement = False
         
         # UI variables
         self._create_variables()
@@ -113,12 +114,18 @@ class SpectralMeasurementGUI:
         # Save label
         self.save_label = tk.StringVar()
         
-        # Auto-repeat
+        # Auto-repeat (count-based)
         self.auto_repeat_enabled = tk.BooleanVar(value=False)
-        self.auto_repeat_interval = tk.IntVar(value=300)
+        self.auto_repeat_count = tk.IntVar(value=50)  # Number of measurements to execute
         self.auto_repeat_types: Dict[str, tk.BooleanVar] = {}
         for mtype in self.capabilities.measurement_types:
             self.auto_repeat_types[mtype.value] = tk.BooleanVar(value=False)
+        
+        # Counter for tracking progress
+        self.auto_repeat_current_count = 0
+        self.auto_repeat_target_count = 0
+        self.auto_repeat_settings = {}  # Snapshot of settings for auto-repeat
+        self.auto_repeat_measurements = []  # Store measurements during auto-repeat
     
     def _apply_theme(self):
         """Apply modern ttk theme"""
@@ -366,13 +373,13 @@ class SpectralMeasurementGUI:
         ttk.Checkbutton(enable_frame, text="Enable Auto-Repeat", variable=self.auto_repeat_enabled,
                         command=self._toggle_auto_repeat).pack(anchor='w')
         
-        # Interval setting
-        interval_frame = ttk.LabelFrame(tab, text="Interval", padding=10)
-        interval_frame.pack(fill=tk.X, pady=10)
+        # Count setting
+        count_frame = ttk.LabelFrame(tab, text="Measurement Count", padding=10)
+        count_frame.pack(fill=tk.X, pady=10)
         
-        ttk.Label(interval_frame, text="Repeat every:").pack(side=tk.LEFT)
-        ttk.Entry(interval_frame, textvariable=self.auto_repeat_interval, width=8).pack(side=tk.LEFT, padx=5)
-        ttk.Label(interval_frame, text="seconds").pack(side=tk.LEFT)
+        ttk.Label(count_frame, text="Number of measurements:").pack(side=tk.LEFT)
+        ttk.Entry(count_frame, textvariable=self.auto_repeat_count, width=8).pack(side=tk.LEFT, padx=5)
+        ttk.Label(count_frame, text="(executed sequentially)").pack(side=tk.LEFT)
         
         # Measurement types to repeat
         types_frame = ttk.LabelFrame(tab, text="Measurements to Repeat", padding=10)
@@ -389,8 +396,8 @@ class SpectralMeasurementGUI:
         self.auto_repeat_status = ttk.Label(status_frame, text="Inactive")
         self.auto_repeat_status.pack(anchor='w')
         
-        self.auto_repeat_next = ttk.Label(status_frame, text="")
-        self.auto_repeat_next.pack(anchor='w')
+        self.auto_repeat_progress = ttk.Label(status_frame, text="")
+        self.auto_repeat_progress.pack(anchor='w')
         
         # Control buttons
         btn_frame = ttk.Frame(tab)
@@ -562,6 +569,20 @@ class SpectralMeasurementGUI:
         
         # Update result display
         self._update_result_display(result)
+        
+        # Handle auto-repeat mode
+        if self.auto_repeat_active and self.auto_repeat_waiting_for_measurement:
+            # Store the measurement
+            self.auto_repeat_measurements.append(result)
+            
+            # Increment counter
+            self.auto_repeat_current_count += 1
+            self._update_repeat_progress()
+            
+            # Add 1 second stabilization delay before next measurement
+            self.auto_repeat_waiting_for_measurement = False
+            self.auto_repeat_job = self.root.after(1000, self._auto_repeat_cycle)
+            return
         
         # Update plot
         self.plot_window.update_spectrum(
@@ -743,19 +764,34 @@ class SpectralMeasurementGUI:
             messagebox.showwarning("No Types Selected", "Please select measurement types to repeat")
             return
         
+        # Validate count
+        count = self.auto_repeat_count.get()
+        if count <= 0:
+            messagebox.showwarning("Invalid Count", "Please enter a positive number of measurements")
+            return
+        
+        # Save current settings snapshot to avoid interference from Settings tab
+        self.auto_repeat_settings = {name: var.get() for name, var in self.setting_vars.items()}
+        
         self.auto_repeat_active = True
         self.auto_repeat_enabled.set(True)
+        self.auto_repeat_current_count = 0
+        self.auto_repeat_target_count = count
+        self.auto_repeat_waiting_for_measurement = False
+        self.auto_repeat_measurements = []  # Clear previous measurements
         
         self.start_repeat_btn.config(state='disabled')
         self.stop_repeat_btn.config(state='normal')
         
         self.auto_repeat_status.config(text="Active", foreground='green')
+        self._update_repeat_progress()
         
         self._auto_repeat_cycle()
     
     def _stop_auto_repeat(self):
         """Stop auto-repeat measurements"""
         self.auto_repeat_active = False
+        self.auto_repeat_waiting_for_measurement = False
         
         if self.auto_repeat_job:
             self.root.after_cancel(self.auto_repeat_job)
@@ -765,27 +801,106 @@ class SpectralMeasurementGUI:
         self.stop_repeat_btn.config(state='disabled')
         
         self.auto_repeat_status.config(text="Inactive", foreground='gray')
-        self.auto_repeat_next.config(text="")
+        self.auto_repeat_progress.config(text="")
+        self.auto_repeat_current_count = 0
+        self.auto_repeat_settings = {}
     
     def _auto_repeat_cycle(self):
-        """Execute one auto-repeat cycle"""
+        """Execute one auto-repeat cycle (count-based)"""
         if not self.auto_repeat_active:
             return
         
-        # Perform measurements for selected types
+        # Check if we've reached the target count
+        if self.auto_repeat_current_count >= self.auto_repeat_target_count:
+            self._stop_auto_repeat()
+            # Save all measurements to CSV
+            self._save_auto_repeat_measurements()
+            return
+        
+        # If we're waiting for a measurement to complete, check again later
+        if self.auto_repeat_waiting_for_measurement or self.is_measuring:
+            self.auto_repeat_job = self.root.after(100, self._auto_repeat_cycle)
+            return
+        
+        # Start measurement for selected types
         for mtype, enabled in self.auto_repeat_types.items():
-            if enabled.get() and not self.is_measuring:
-                self._quick_measure(mtype)
-                self.root.after(2000, self._save_measurement)  # Auto-save after delay
+            if enabled.get():
+                self.auto_repeat_waiting_for_measurement = True
+                self._auto_repeat_measure(mtype)
+                break  # Only measure one type at a time
         
-        # Schedule next cycle
-        interval = self.auto_repeat_interval.get() * 1000  # Convert to ms
-        self.auto_repeat_job = self.root.after(interval, self._auto_repeat_cycle)
+        # Schedule next check
+        self.auto_repeat_job = self.root.after(100, self._auto_repeat_cycle)
+    
+    def _auto_repeat_measure(self, measurement_type: str):
+        """Perform a measurement during auto-repeat with saved settings"""
+        self.measurement_type.set(measurement_type)
+        self.is_measuring = True
+        self.abort_requested = False
         
-        # Update next time display
-        next_time = datetime.now().timestamp() + self.auto_repeat_interval.get()
-        next_str = datetime.fromtimestamp(next_time).strftime("%H:%M:%S")
-        self.auto_repeat_next.config(text=f"Next: {next_str}")
+        # Update UI
+        self.measure_btn.config(state='disabled')
+        self.save_btn.config(state='disabled')
+        self._show_progress(True)
+        self._set_status("Auto-measuring...", "yellow")
+        
+        # Start thread with saved settings snapshot
+        thread = threading.Thread(
+            target=self._measurement_thread,
+            args=(measurement_type, self.auto_repeat_settings),
+            daemon=True
+        )
+        thread.start()
+    
+    def _update_repeat_progress(self):
+        """Update the progress display for count-based auto-repeat"""
+        progress_text = f"Progress: {self.auto_repeat_current_count} / {self.auto_repeat_target_count}"
+        self.auto_repeat_progress.config(text=progress_text)
+    
+    def _save_auto_repeat_measurements(self):
+        """Save all auto-repeat measurements to CSV file with format: Wavelength,Intensity1,Intensity2,..."""
+        if not self.auto_repeat_measurements:
+            messagebox.showwarning("No Data", "No measurements were collected")
+            return
+        
+        # Generate default filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_filename = f"auto_repeat_{timestamp}.csv"
+        
+        filepath = filedialog.asksaveasfilename(
+            title="Save Auto-Repeat Measurements",
+            defaultextension=".csv",
+            initialfile=default_filename,
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        
+        if not filepath:
+            return
+        
+        try:
+            with open(filepath, 'w') as f:
+                # Get wavelengths from first measurement (all should have same wavelengths)
+                wavelengths = self.auto_repeat_measurements[0].wavelengths
+                
+                # Write header: Wavelength (nm),Intensity1,Intensity2,...,IntensityX
+                header = "Wavelength (nm)"
+                for i in range(len(self.auto_repeat_measurements)):
+                    header += f",Intensity{i+1}"
+                f.write(header + "\n")
+                
+                # Write data rows
+                for i, wl in enumerate(wavelengths):
+                    row = f"{int(wl)}"
+                    for measurement in self.auto_repeat_measurements:
+                        intensity = measurement.spectral_data[i]
+                        row += f",{intensity:.6e}"
+                    f.write(row + "\n")
+            
+            messagebox.showinfo("Auto-Repeat Complete", 
+                               f"Completed {self.auto_repeat_target_count} measurements\n\nData saved to:\n{filepath}")
+        
+        except Exception as e:
+            messagebox.showerror("Save Error", f"Failed to save measurements:\n{str(e)}")
     
     # =========================================================================
     # Status Functions
